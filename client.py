@@ -6,7 +6,10 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import ContentModAction, ContentModObservation
+try:
+    from .models import ContentModAction, ContentModObservation
+except (ImportError, ModuleNotFoundError):
+    from models import ContentModAction, ContentModObservation
 
 
 class ContentModEnv(EnvClient[ContentModAction, ContentModObservation, State]):
