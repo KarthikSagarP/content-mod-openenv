@@ -202,13 +202,13 @@ def run_task(task_name: str, llm_client: OpenAI, base_url: str) -> float:
             if done:
                 break
 
-        score = sum(rewards) / max_posts if max_posts > 0 else 0.0
-        score = min(max(score, 0.0), 1.0)
+        score = sum(rewards) / max_posts if max_posts > 0 else 0.01
+        score = min(max(score, 0.01), 0.99)  # strictly between 0 and 1
         success = score >= 0.3
 
     except Exception as e:
         print(f"[DEBUG] Task {task_name} error: {e}", flush=True)
-        score = 0.0
+        score = 0.01
         success = False
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
