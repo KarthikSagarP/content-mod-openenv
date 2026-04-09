@@ -7,7 +7,7 @@ MANDATORY env vars:
     API_BASE_URL   The API endpoint for the LLM.
     MODEL_NAME     The model identifier to use for inference.
     HF_TOKEN       Your Hugging Face / API key.
-    IMAGE_NAME     Docker image name (for from_docker_image)
+    IMAGE_NAME     The name of the local image (optional, for from_docker_image)
 """
 
 import asyncio
@@ -25,13 +25,13 @@ IMAGE_NAME = os.getenv("IMAGE_NAME")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+SPACE_URL = os.getenv("SPACE_URL", "https://skibidikarthik-content-moderation-env.hf.space")
 BENCHMARK = "content_mod"
 MAX_STEPS = 10
 TEMPERATURE = 0.3
 MAX_TOKENS = 500
 
 TASK_NAMES = ["easy_moderation", "medium_moderation", "hard_moderation"]
-# Max possible reward per post is 1.0
 TASK_POST_COUNTS = {"easy_moderation": 3, "medium_moderation": 4, "hard_moderation": 5}
 
 SYSTEM_PROMPT = textwrap.dedent("""
@@ -152,7 +152,11 @@ async def run_task(task_name: str, llm_client: OpenAI) -> float:
     os.environ["CONTENT_MOD_TASK"] = task_name
     max_posts = TASK_POST_COUNTS.get(task_name, 3)
 
-    env = await ContentModEnv.from_docker_image(IMAGE_NAME)
+    # Connect to running HF Space, fall back to Docker if IMAGE_NAME is set
+    if IMAGE_NAME:
+        env = await ContentModEnv.from_docker_image(IMAGE_NAME)
+    else:
+        env = ContentModEnv(base_url=SPACE_URL)
 
     rewards: List[float] = []
     steps_taken = 0
