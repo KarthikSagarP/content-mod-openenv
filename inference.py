@@ -7,25 +7,26 @@ MANDATORY env vars:
     API_BASE_URL   The API endpoint for the LLM.
     MODEL_NAME     The model identifier to use for inference.
     HF_TOKEN       Your Hugging Face / API key.
-    IMAGE_NAME     The name of the local image (optional, for from_docker_image)
+    LOCAL_IMAGE_NAME  Optional, not used in this script.
 """
 
-import asyncio
 import json
 import os
 import textwrap
 from typing import List, Optional
 
+import requests
 from openai import OpenAI
 
-from client import ContentModEnv
-from models import ContentModAction
-
-IMAGE_NAME = os.getenv("IMAGE_NAME")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
-SPACE_URL = os.getenv("SPACE_URL", "https://skibidikarthik-content-moderation-env.hf.space")
+IMAGE_NAME = os.getenv("IMAGE_NAME")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
+
+# Environment server URL — connect to the live HF Space
+ENV_URL = os.getenv("ENV_URL", "https://skibidikarthik-content-moderation-env.hf.space")
+
 BENCHMARK = "content_mod"
 MAX_STEPS = 10
 TEMPERATURE = 0.3
@@ -78,30 +79,44 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
     )
 
 
-def build_user_prompt(obs) -> str:
+def env_reset(base_url: str) -> dict:
+    """Call POST /reset on the environment server."""
+    resp = requests.post(f"{base_url}/reset", json={}, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def env_step(base_url: str, action_dict: dict) -> dict:
+    """Call POST /step on the environment server."""
+    resp = requests.post(f"{base_url}/step", json={"action": action_dict}, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def build_user_prompt(obs: dict) -> str:
     return textwrap.dedent(f"""
 POST TO MODERATE:
-Post ID: {obs.post_id}
-Content: {obs.post_content}
+Post ID: {obs.get('post_id', '')}
+Content: {obs.get('post_content', '')}
 
 AUTHOR INFO:
-Name: {obs.author_name}
-Account age: {obs.author_account_age_days} days
-Prior violations: {obs.author_prior_violations}
+Name: {obs.get('author_name', '')}
+Account age: {obs.get('author_account_age_days', 0)} days
+Prior violations: {obs.get('author_prior_violations', 0)}
 
 CONTENT POLICY:
-{obs.content_policy}
+{obs.get('content_policy', '')}
 
-Posts remaining after this: {obs.posts_remaining}
+Posts remaining after this: {obs.get('posts_remaining', 0)}
 
-Previous feedback: {obs.feedback}
+Previous feedback: {obs.get('feedback', '')}
 
 Respond with a JSON moderation decision.
 """).strip()
 
 
-def parse_model_response(text: str) -> ContentModAction:
-    """Parse the LLM JSON response into a ContentModAction."""
+def parse_model_response(text: str) -> dict:
+    """Parse the LLM JSON response into an action dict."""
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[-1]
@@ -110,21 +125,23 @@ def parse_model_response(text: str) -> ContentModAction:
         cleaned = cleaned.strip()
     try:
         data = json.loads(cleaned)
-        return ContentModAction(
-            verdict=data.get("verdict", "approve"),
-            violated_rules=data.get("violated_rules", []),
-            severity=data.get("severity", "none"),
-            explanation=data.get("explanation", ""),
-        )
+        return {
+            "verdict": data.get("verdict", "approve"),
+            "violated_rules": data.get("violated_rules", []),
+            "severity": data.get("severity", "none"),
+            "explanation": data.get("explanation", ""),
+        }
     except (json.JSONDecodeError, Exception) as e:
         print(f"[DEBUG] Parse error: {e}, raw: {text[:200]}", flush=True)
-        return ContentModAction(
-            verdict="approve", violated_rules=[], severity="none",
-            explanation="Failed to parse model response",
-        )
+        return {
+            "verdict": "approve",
+            "violated_rules": [],
+            "severity": "none",
+            "explanation": "Failed to parse model response",
+        }
 
 
-def get_model_decision(client: OpenAI, obs) -> ContentModAction:
+def get_model_decision(client: OpenAI, obs: dict) -> dict:
     user_prompt = build_user_prompt(obs)
     try:
         completion = client.chat.completions.create(
@@ -141,44 +158,42 @@ def get_model_decision(client: OpenAI, obs) -> ContentModAction:
         return parse_model_response(text)
     except Exception as exc:
         print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        return ContentModAction(
-            verdict="approve", violated_rules=[], severity="none",
-            explanation="Model request failed",
-        )
+        return {
+            "verdict": "approve",
+            "violated_rules": [],
+            "severity": "none",
+            "explanation": "Model request failed",
+        }
 
 
-async def run_task(task_name: str, llm_client: OpenAI) -> float:
+def run_task(task_name: str, llm_client: OpenAI, base_url: str) -> float:
     """Run a single task and return the normalized score [0, 1]."""
-    os.environ["CONTENT_MOD_TASK"] = task_name
     max_posts = TASK_POST_COUNTS.get(task_name, 3)
-
-    # Connect to running HF Space, fall back to Docker if IMAGE_NAME is set
-    if IMAGE_NAME:
-        env = await ContentModEnv.from_docker_image(IMAGE_NAME)
-    else:
-        env = ContentModEnv(base_url=SPACE_URL)
 
     rewards: List[float] = []
     steps_taken = 0
+    score = 0.0
+    success = False
 
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = await env.reset()
-        obs = result.observation
+        reset_resp = env_reset(base_url)
+        obs = reset_resp.get("observation", {})
+        done = reset_resp.get("done", False)
 
         for step in range(1, MAX_STEPS + 1):
-            if result.done:
+            if done:
                 break
 
             action = get_model_decision(llm_client, obs)
-            action_str = f"verdict={action.verdict},rules={action.violated_rules},sev={action.severity}"
+            action_str = f"verdict={action['verdict']},rules={action['violated_rules']},sev={action['severity']}"
 
-            result = await env.step(action)
-            obs = result.observation
+            step_resp = env_step(base_url, action)
+            obs = step_resp.get("observation", {})
+            reward = step_resp.get("reward", 0.0) or 0.0
+            done = step_resp.get("done", False)
 
-            reward = result.reward or 0.0
-            done = result.done
             rewards.append(reward)
             steps_taken = step
 
@@ -196,21 +211,17 @@ async def run_task(task_name: str, llm_client: OpenAI) -> float:
         score = 0.0
         success = False
     finally:
-        try:
-            await env.close()
-        except Exception as e:
-            print(f"[DEBUG] env.close() error: {e}", flush=True)
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     return score
 
 
-async def main() -> None:
+def main() -> None:
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     scores = {}
     for task_name in TASK_NAMES:
-        score = await run_task(task_name, llm_client)
+        score = run_task(task_name, llm_client, ENV_URL)
         scores[task_name] = score
 
     print("\n=== BASELINE RESULTS ===", flush=True)
@@ -221,4 +232,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
