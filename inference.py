@@ -10,12 +10,13 @@ MANDATORY env vars:
     LOCAL_IMAGE_NAME  Optional, not used in this script.
 """
 
+import asyncio
 import json
 import os
 import textwrap
 from typing import List, Optional
 
-import requests
+import websockets
 from openai import OpenAI
 
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
@@ -24,7 +25,7 @@ MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 IMAGE_NAME = os.getenv("IMAGE_NAME")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
-# Environment server URL — connect to the live HF Space
+# Environment server URL
 ENV_URL = os.getenv("ENV_URL", "https://skibidikarthik-content-moderation-env.hf.space")
 
 BENCHMARK = "content_mod"
@@ -79,18 +80,14 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
     )
 
 
-def env_reset(base_url: str) -> dict:
-    """Call POST /reset on the environment server."""
-    resp = requests.post(f"{base_url}/reset", json={}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def env_step(base_url: str, action_dict: dict) -> dict:
-    """Call POST /step on the environment server."""
-    resp = requests.post(f"{base_url}/step", json={"action": action_dict}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+def get_ws_url(base_url: str) -> str:
+    """Convert HTTP URL to WebSocket URL."""
+    url = base_url.rstrip("/")
+    if url.startswith("https://"):
+        return url.replace("https://", "wss://") + "/ws"
+    elif url.startswith("http://"):
+        return url.replace("http://", "ws://") + "/ws"
+    return url + "/ws"
 
 
 def build_user_prompt(obs: dict) -> str:
@@ -166,44 +163,54 @@ def get_model_decision(client: OpenAI, obs: dict) -> dict:
         }
 
 
-def run_task(task_name: str, llm_client: OpenAI, base_url: str) -> float:
-    """Run a single task and return the normalized score [0, 1]."""
+async def run_task(task_name: str, llm_client: OpenAI, base_url: str) -> float:
+    """Run a single task over WebSocket and return the normalized score [0, 1]."""
     max_posts = TASK_POST_COUNTS.get(task_name, 3)
+    ws_url = get_ws_url(base_url)
 
     rewards: List[float] = []
     steps_taken = 0
-    score = 0.0
+    score = 0.01
     success = False
 
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        reset_resp = env_reset(base_url)
-        obs = reset_resp.get("observation", {})
-        done = reset_resp.get("done", False)
+        async with websockets.connect(ws_url, close_timeout=10) as ws:
+            # Reset
+            await ws.send(json.dumps({"type": "reset", "data": {}}))
+            reset_msg = json.loads(await ws.recv())
+            obs = reset_msg.get("data", {}).get("observation", reset_msg.get("data", {}))
+            done = reset_msg.get("data", {}).get("done", False)
 
-        for step in range(1, MAX_STEPS + 1):
-            if done:
-                break
+            for step in range(1, MAX_STEPS + 1):
+                if done:
+                    break
 
-            action = get_model_decision(llm_client, obs)
-            action_str = f"verdict={action['verdict']},rules={action['violated_rules']},sev={action['severity']}"
+                action = get_model_decision(llm_client, obs)
+                action_str = f"verdict={action['verdict']},rules={action['violated_rules']},sev={action['severity']}"
 
-            step_resp = env_step(base_url, action)
-            obs = step_resp.get("observation", {})
-            reward = step_resp.get("reward", 0.0) or 0.0
-            done = step_resp.get("done", False)
+                # Step
+                await ws.send(json.dumps({"type": "step", "data": action}))
+                step_msg = json.loads(await ws.recv())
+                step_data = step_msg.get("data", {})
+                obs = step_data.get("observation", step_data)
+                reward = step_data.get("reward", 0.0) or 0.0
+                done = step_data.get("done", False)
 
-            rewards.append(reward)
-            steps_taken = step
+                rewards.append(reward)
+                steps_taken = step
 
-            log_step(step=step, action=action_str, reward=reward, done=done, error=None)
+                log_step(step=step, action=action_str, reward=reward, done=done, error=None)
 
-            if done:
-                break
+                if done:
+                    break
+
+            # Close session
+            await ws.send(json.dumps({"type": "close"}))
 
         score = sum(rewards) / max_posts if max_posts > 0 else 0.01
-        score = min(max(score, 0.01), 0.99)  # strictly between 0 and 1
+        score = min(max(score, 0.01), 0.99)
         success = score >= 0.3
 
     except Exception as e:
@@ -216,12 +223,12 @@ def run_task(task_name: str, llm_client: OpenAI, base_url: str) -> float:
     return score
 
 
-def main() -> None:
+async def async_main() -> None:
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     scores = {}
     for task_name in TASK_NAMES:
-        score = run_task(task_name, llm_client, ENV_URL)
+        score = await run_task(task_name, llm_client, ENV_URL)
         scores[task_name] = score
 
     print("\n=== BASELINE RESULTS ===", flush=True)
@@ -232,4 +239,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(async_main())
