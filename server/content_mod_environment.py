@@ -4,6 +4,15 @@ Content Moderation Environment Implementation.
 An agent reviews user-generated posts against a content policy. Each episode
 presents a sequence of posts; the agent must classify, assign severity, and
 choose a moderation action for each one.
+
+Grading factors:
+  - Verdict correctness (0.35)
+  - Rule identification via Jaccard similarity (0.25)
+  - Severity accuracy (0.15)
+  - Explanation quality / key concepts (0.10)
+  - Over-moderation penalty (-0.10 for removing/escalating safe content)
+  - Author history awareness bonus (+0.05 for considering repeat offenders)
+  - False negative penalty (-0.10 for approving clearly violating content)
 """
 
 import os
@@ -20,27 +29,31 @@ except ImportError:
     from server.tasks import CONTENT_POLICY, TASKS
 
 
-def _grade_action(action: ContentModAction, truth: dict) -> tuple[float, str]:
+def _grade_action(action: ContentModAction, truth: dict, post: dict = None) -> tuple[float, str]:
     """Grade a moderation action against the ground truth.
 
     Returns (reward, feedback_string). Reward in [0.0, 1.0].
     Scoring breakdown:
-      - Correct verdict:       0.40
-      - Correct rules:         0.30  (partial: Jaccard similarity)
-      - Correct severity:      0.20  (partial: 1 - distance/4)
-      - Explanation quality:   0.10  (mentions key concepts)
+      - Correct verdict:              0.35
+      - Correct rules:                0.25  (partial: Jaccard similarity)
+      - Correct severity:             0.15  (partial: 1 - distance/4)
+      - Explanation quality:          0.10  (mentions key concepts)
+      - Over-moderation penalty:     -0.10  (removing/escalating safe content)
+      - False negative penalty:      -0.10  (approving violating content)
+      - Author history bonus:        +0.05  (stricter on repeat offenders)
     """
     feedback_parts = []
     total = 0.0
 
-    # --- Verdict (0.40) ---
     v_agent = action.verdict.strip().lower()
     v_truth = truth["verdict"].strip().lower()
+    rules_truth = set(r.strip().upper() for r in truth["violated_rules"])
+
+    # --- Verdict (0.35) ---
     if v_agent == v_truth:
-        total += 0.40
+        total += 0.35
         feedback_parts.append("Verdict: correct")
     else:
-        # Partial credit for close verdicts
         close_pairs = {
             frozenset({"warn", "remove"}): 0.15,
             frozenset({"remove", "escalate"}): 0.20,
@@ -53,30 +66,30 @@ def _grade_action(action: ContentModAction, truth: dict) -> tuple[float, str]:
             f"Verdict: wrong (expected '{v_truth}', got '{v_agent}', +{partial:.2f})"
         )
 
-    # --- Violated rules (0.30) ---
+    # --- Violated rules (0.25) ---
     rules_agent = set(r.strip().upper() for r in action.violated_rules)
-    rules_truth = set(r.strip().upper() for r in truth["violated_rules"])
 
     if not rules_truth and not rules_agent:
-        total += 0.30
+        total += 0.25
         feedback_parts.append("Rules: correct (none violated)")
     elif rules_truth or rules_agent:
         union = rules_truth | rules_agent
         intersection = rules_truth & rules_agent
         jaccard = len(intersection) / len(union) if union else 0.0
-        rule_score = 0.30 * jaccard
+        rule_score = 0.25 * jaccard
         total += rule_score
         feedback_parts.append(
             f"Rules: {intersection} correct out of expected {rules_truth} (+{rule_score:.2f})"
         )
-    # --- Severity (0.20) ---
+
+    # --- Severity (0.15) ---
     sev_order = ["none", "low", "medium", "high", "critical"]
     s_agent = action.severity.strip().lower()
     s_truth = truth["severity"].strip().lower()
 
     if s_agent in sev_order and s_truth in sev_order:
         dist = abs(sev_order.index(s_agent) - sev_order.index(s_truth))
-        sev_score = 0.20 * max(0.0, 1.0 - dist / 4.0)
+        sev_score = 0.15 * max(0.0, 1.0 - dist / 4.0)
         total += sev_score
         if dist == 0:
             feedback_parts.append("Severity: correct")
@@ -102,7 +115,41 @@ def _grade_action(action: ContentModAction, truth: dict) -> tuple[float, str]:
         total += 0.10
         feedback_parts.append("Explanation: ok")
 
-    return round(total, 4), " | ".join(feedback_parts)
+    # --- Over-moderation penalty (-0.10) ---
+    # Penalize removing or escalating content that is actually safe
+    if v_truth == "approve" and v_agent in ("remove", "escalate"):
+        total -= 0.10
+        feedback_parts.append("Over-moderation penalty: -0.10 (safe content flagged)")
+    elif v_truth == "approve" and v_agent == "warn":
+        total -= 0.05
+        feedback_parts.append("Over-moderation penalty: -0.05 (safe content warned)")
+
+    # --- False negative penalty (-0.10) ---
+    # Penalize approving content that should have been removed or escalated
+    if v_truth in ("remove", "escalate") and v_agent == "approve":
+        total -= 0.10
+        feedback_parts.append("False negative penalty: -0.10 (violation approved)")
+
+    # --- Author history bonus (+0.05) ---
+    # Reward stricter action on repeat offenders, leniency on first-timers
+    if post is not None:
+        prior_violations = post.get("author_prior_violations", 0)
+        if prior_violations >= 2 and rules_truth:
+            # Repeat offender with actual violation — reward strict action
+            if v_agent in ("remove", "escalate"):
+                total += 0.05
+                feedback_parts.append("Author history bonus: +0.05 (strict on repeat offender)")
+            else:
+                feedback_parts.append("Author history: repeat offender (2+ violations) — consider stricter action")
+        elif prior_violations == 0 and v_truth == "approve" and v_agent == "approve":
+            # Clean author, safe content — reward correct approval
+            total += 0.05
+            feedback_parts.append("Author history bonus: +0.05 (correctly approved clean author)")
+
+    # Clamp to [0, 1]
+    total = round(min(max(total, 0.0), 1.0), 4)
+
+    return total, " | ".join(feedback_parts)
 
 
 class ContentModEnvironment(Environment):
@@ -111,12 +158,13 @@ class ContentModEnvironment(Environment):
 
     Each episode presents a queue of user-generated posts. The agent reviews
     one post per step and submits a moderation decision. Reward is computed
-    per-post via a multi-factor grader.
+    per-post via a multi-factor grader with over-moderation penalties and
+    author history bonuses.
 
     Tasks:
-        easy_moderation   — obvious violations & safe content (3 posts)
-        medium_moderation — context-dependent & borderline (4 posts)
-        hard_moderation   — adversarial, obfuscated, nuanced (5 posts)
+        easy_moderation   — obvious violations & safe content (5 posts, multilingual)
+        medium_moderation — context-dependent & borderline (7 posts, multilingual)
+        hard_moderation   — adversarial, obfuscated, nuanced (8 posts, multilingual)
     """
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
@@ -131,7 +179,7 @@ class ContentModEnvironment(Environment):
     def reset(self) -> ContentModObservation:
         self._state = State(episode_id=str(uuid4()), step_count=0)
         task = TASKS.get(self._task_id, TASKS["easy_moderation"])
-        self._posts = list(task["posts"])  # shallow copy
+        self._posts = list(task["posts"])
         self._current_idx = 0
         self._feedback = ""
 
@@ -153,9 +201,9 @@ class ContentModEnvironment(Environment):
     def step(self, action: ContentModAction) -> ContentModObservation:
         self._state.step_count += 1
 
-        # Grade current post
+        # Grade current post (pass post data for author history scoring)
         post = self._posts[self._current_idx]
-        reward, feedback = _grade_action(action, post["truth"])
+        reward, feedback = _grade_action(action, post["truth"], post)
 
         self._current_idx += 1
         done = self._current_idx >= len(self._posts)
