@@ -34,7 +34,7 @@ TEMPERATURE = 0.3
 MAX_TOKENS = 500
 
 TASK_NAMES = ["easy_moderation", "medium_moderation", "hard_moderation"]
-TASK_POST_COUNTS = {"easy_moderation": 3, "medium_moderation": 4, "hard_moderation": 5}
+TASK_POST_COUNTS = {"easy_moderation": 5, "medium_moderation": 9, "hard_moderation": 8}
 
 SYSTEM_PROMPT = textwrap.dedent("""
 You are a content moderator AI. You are given a user post and a content policy.
