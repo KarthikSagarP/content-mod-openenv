@@ -8,21 +8,21 @@ app_port: 8000
 tags:
   - openenv
 pinned: false
-short_description: OpenEnv content moderation environment for AI agents
+short_description: Multilingual OpenEnv content moderation environment for AI agents
 ---
 
 # Content Moderation Environment
 
-An OpenEnv environment where AI agents act as content moderators, reviewing user-generated posts against a detailed content policy and making moderation decisions.
+An OpenEnv environment where AI agents act as content moderators, reviewing user-generated posts against a detailed content policy and making moderation decisions. Features **multilingual content** in English, Hindi, Hinglish, and Kannada for realistic Indian platform moderation scenarios.
 
 ## Motivation
 
-Content moderation is one of the most important and challenging real-world tasks at scale. Platforms process millions of posts daily, and AI-assisted moderation is already deployed in production. This environment lets researchers train and evaluate agents on realistic moderation scenarios — from obvious spam to adversarial, obfuscated hate speech that challenges even expert human moderators.
+Content moderation is one of the most important and challenging real-world tasks at scale. Platforms in India process millions of posts daily across multiple languages, and AI-assisted moderation must handle code-switching, regional languages, and culturally-specific context. This environment lets researchers train and evaluate agents on realistic multilingual moderation scenarios — from obvious spam to adversarial, obfuscated hate speech in mixed languages.
 
 ## How It Works
 
 Each episode presents the agent with a queue of user-generated posts. For each post, the agent sees:
-- The post content
+- The post content (may be in English, Hindi, Hinglish, or Kannada)
 - Author metadata (account age, prior violations)
 - The full content policy
 
@@ -42,7 +42,7 @@ The agent must submit a moderation decision: verdict, violated rules, severity, 
 | Field | Type | Description |
 |-------|------|-------------|
 | `post_id` | string | Unique identifier for the current post |
-| `post_content` | string | The user-generated content to review |
+| `post_content` | string | The user-generated content to review (multilingual) |
 | `author_name` | string | Display name of the author |
 | `author_account_age_days` | int | Account age in days |
 | `author_prior_violations` | int | Number of previous policy violations |
@@ -57,23 +57,33 @@ Each moderation decision is scored on four factors (total 0.0–1.0 per post):
 
 | Component | Weight | Details |
 |-----------|--------|---------|
-| Correct verdict | 0.40 | Exact match; partial credit for close verdicts |
-| Correct rules | 0.30 | Jaccard similarity between predicted and true violated rules |
-| Correct severity | 0.20 | Partial credit based on distance in severity scale |
+| Correct verdict | 0.35 | Exact match; partial credit for close verdicts |
+| Correct rules | 0.25 | Jaccard similarity between predicted and true violated rules |
+| Correct severity | 0.15 | Partial credit based on distance in severity scale |
 | Explanation quality | 0.10 | Proportion of key concepts mentioned |
+| Over-moderation penalty | -0.10 | Penalizes removing or escalating safe content |
+| False negative penalty | -0.10 | Penalizes approving content that violates policy |
+| Author history bonus | +0.05 | Rewards considering repeat offenders and clean authors |
 
 Episode score is the mean reward across all posts, normalized to [0, 1].
 
-## Tasks
+## Tasks (22 posts total)
 
-### 1. `easy_moderation` (Easy — 3 posts)
-Obvious violations: clear spam/scam, explicit hate speech, and benign content. A competent agent should score >0.8.
+### 1. `easy_moderation` (Easy — 5 posts)
+Obvious violations: clear spam/scam (English + Hinglish), explicit hate speech, and benign content (English + Kannada). A competent agent should score >0.8.
 
-### 2. `medium_moderation` (Medium — 4 posts)
-Context-dependent cases: doxxing disguised as venting, health misinformation, protected political speech, and crypto scams. Requires understanding nuance. Expected baseline: 0.5–0.7.
+### 2. `medium_moderation` (Medium — 9 posts)
+Context-dependent cases: doxxing, health misinformation (English + Hinglish), protected political speech (English + Kannada), crypto scams, and community-targeted hate speech in Hinglish. Requires understanding nuance across languages. Expected baseline: 0.5–0.7.
 
-### 3. `hard_moderation` (Hard — 5 posts)
-Adversarial content: leetspeak-obfuscated hate speech, harmful advice disguised as concern, mixed misinformation + affiliate spam, literary satire, and celebrity privacy violations. Challenges frontier models. Expected baseline: 0.3–0.5.
+### 3. `hard_moderation` (Hard — 8 posts)
+Adversarial content: leetspeak-obfuscated hate speech (English + Hinglish), harmful advice disguised as concern, mixed misinformation + affiliate spam (English + Hinglish), literary satire, celebrity privacy violations, positive community content in Kannada (must not be falsely flagged). Challenges frontier models. Expected baseline: 0.3–0.5.
+
+## Languages Covered
+
+- **English** — standard moderation scenarios
+- **Hindi** (Devanagari script) — pure Hindi posts
+- **Hinglish** (Hindi-English code-switching) — the most common format on Indian social media
+- **Kannada** (Kannada script) — regional language content
 
 ## Content Policy
 
@@ -105,7 +115,6 @@ docker run -p 8000:8000 content-mod-env:latest
 ### Run baseline inference
 ```bash
 export HF_TOKEN=your_token_here
-export IMAGE_NAME=content-mod-env:latest
 python inference.py
 ```
 
