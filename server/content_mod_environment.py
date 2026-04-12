@@ -176,8 +176,10 @@ class ContentModEnvironment(Environment):
         self._current_idx = 0
         self._feedback = ""
 
-    def reset(self) -> ContentModObservation:
+    def reset(self, task_id: str = None, **kwargs) -> ContentModObservation:
         self._state = State(episode_id=str(uuid4()), step_count=0)
+        if task_id:
+            self._task_id = task_id
         task = TASKS.get(self._task_id, TASKS["easy_moderation"])
         self._posts = list(task["posts"])
         self._current_idx = 0
