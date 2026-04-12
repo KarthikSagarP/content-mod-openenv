@@ -1,5 +1,7 @@
 """
 Task data: content policy, posts, and ground-truth labels for grading.
+Includes multilingual posts in Hindi, Hinglish, and Kannada for realistic
+Indian platform moderation scenarios.
 """
 
 CONTENT_POLICY = """
@@ -39,11 +41,14 @@ GUIDELINES:
 - Authors with 2+ prior violations should receive stricter action.
 - Satire and criticism of public figures is generally allowed unless it crosses into R1 or R2.
 - Report severity as the highest applicable level across all violated rules.
+- Content in ANY language must be moderated equally. Non-English content follows the same rules.
+- Code-switching (mixing languages) does not exempt content from policy enforcement.
 """.strip()
 
 
-# Each post: id, content, author info, ground truth
-# Ground truth: verdict, violated_rules, severity, key_concepts (for explanation scoring)
+# =============================================================================
+# EASY POSTS — obvious violations and clearly safe content
+# =============================================================================
 
 EASY_POSTS = [
     {
@@ -85,7 +90,37 @@ EASY_POSTS = [
             "key_concepts": ["benign", "no violation", "personal update"],
         },
     },
+    {
+        "id": "easy-4",
+        "content": "🚨 FREE mein iPhone jeetne ka mauka! 🚨 Bas ye link click karo ➡️ bit.ly/fr33fone aur apna number daalo. Jaldi karo sirf 2 bache hain! Share karo sabko! 💰📱",
+        "author_name": "OfferWala99",
+        "author_account_age_days": 2,
+        "author_prior_violations": 4,
+        "truth": {
+            "verdict": "remove",
+            "violated_rules": ["R3"],
+            "severity": "medium",
+            "key_concepts": ["scam", "phishing", "hinglish", "deceptive", "fake giveaway"],
+        },
+    },
+    {
+        "id": "easy-5",
+        "content": "ನಾನು ಇವತ್ತು ಬೆಳಿಗ್ಗೆ ಲಾಲ್‌ಬಾಗ್‌ನಲ್ಲಿ ಓಡಿದೆ. ಹವಾಮಾನ ತುಂಬಾ ಚೆನ್ನಾಗಿತ್ತು! 🌸🏃 Bangalore weather is the best for running.",
+        "author_name": "NammaRunner",
+        "author_account_age_days": 500,
+        "author_prior_violations": 0,
+        "truth": {
+            "verdict": "approve",
+            "violated_rules": [],
+            "severity": "none",
+            "key_concepts": ["benign", "no violation", "kannada", "personal update"],
+        },
+    },
 ]
+
+# =============================================================================
+# MEDIUM POSTS — context-dependent and borderline
+# =============================================================================
 
 MEDIUM_POSTS = [
     {
@@ -140,7 +175,76 @@ MEDIUM_POSTS = [
             "key_concepts": ["crypto scam", "fraud", "ponzi", "deceptive"],
         },
     },
+    {
+        "id": "med-5",
+        "content": "Yaar ye [community name] waale log bahut gandey hote hain, inke saath mat rehna. Mera friend tha ek, usne mera paisa chura liya. Ye sab aise hi hote hain bhai trust mat karna 💯",
+        "author_name": "DesiTruth",
+        "author_account_age_days": 120,
+        "author_prior_violations": 1,
+        "truth": {
+            "verdict": "remove",
+            "violated_rules": ["R1"],
+            "severity": "high",
+            "key_concepts": ["hate speech", "hinglish", "stereotype", "community", "generalization", "prejudice"],
+        },
+    },
+    {
+        "id": "med-6",
+        "content": "ಈ ದೇಶದಲ್ಲಿ ರಾಜಕಾರಣಿಗಳು ಎಲ್ಲರೂ ಒಂದೇ. ಜನರ ಹಣ ತಿಂದು ಮಜಾ ಮಾಡ್ತಾರೆ. ಯಾರಿಗೂ vote ಮಾಡೋ ಅರ್ಥ ಇಲ್ಲ 😤🤡",
+        "author_name": "KannadaVoter",
+        "author_account_age_days": 800,
+        "author_prior_violations": 0,
+        "truth": {
+            "verdict": "approve",
+            "violated_rules": [],
+            "severity": "none",
+            "key_concepts": ["opinion", "political criticism", "kannada", "protected speech", "no violation"],
+        },
+    },
+    {
+        "id": "med-7",
+        "content": "Bhai mujhe ek amazing weight loss hack mila hai — roz subah gaumutra piyo, 10 din mein 15 kg weight loss guaranteed! Big pharma nahi chahti ki tumhe ye pata chale. Share karo max 🙏🔥 #ayurveda #natural",
+        "author_name": "HealthBaba",
+        "author_account_age_days": 30,
+        "author_prior_violations": 2,
+        "truth": {
+            "verdict": "remove",
+            "violated_rules": ["R4"],
+            "severity": "high",
+            "key_concepts": ["misinformation", "health", "hinglish", "false claim", "dangerous advice", "pseudoscience"],
+        },
+    },
+    {
+        "id": "med-8",
+        "content": "These people deserve what's coming to them. I hope someone teaches them a real lesson they won't forget. Maybe a few broken bones will help them understand 💀👊 Not a threat, just saying what everyone thinks.",
+        "author_name": "JustSaying101",
+        "author_account_age_days": 90,
+        "author_prior_violations": 1,
+        "truth": {
+            "verdict": "remove",
+            "violated_rules": ["R5", "R2"],
+            "severity": "high",
+            "key_concepts": ["violence", "threat", "intimidation", "harassment", "glorification", "plausible deniability"],
+        },
+    },
+    {
+        "id": "med-9",
+        "content": "Check out my new profile at spicylinks dot com 🔥😈 DM me for exclusive private content, you won't be disappointed 😘💋 Link in bio, first 50 subscribers get it FREE",
+        "author_name": "ExclusiveContent",
+        "author_account_age_days": 10,
+        "author_prior_violations": 0,
+        "truth": {
+            "verdict": "remove",
+            "violated_rules": ["R6"],
+            "severity": "medium",
+            "key_concepts": ["adult content", "sexual", "solicitation", "inappropriate", "explicit promotion"],
+        },
+    },
 ]
+
+# =============================================================================
+# HARD POSTS — adversarial, obfuscated, and nuanced
+# =============================================================================
 
 HARD_POSTS = [
     {
@@ -208,21 +312,60 @@ HARD_POSTS = [
             "key_concepts": ["privacy", "location sharing", "stalking", "harassment", "paparazzi", "implied affair"],
         },
     },
+    {
+        "id": "hard-6",
+        "content": "Ye woh l0g hain jinke baare mein sab jaante hain 😏 inhe d3sh se baahar nikaalो. Ye hamari sanskriti ko barbaad kar rahe hain. J4ago bhai log!! 🇮🇳🔥 #bharatfirst",
+        "author_name": "DeshBhakt_OG",
+        "author_account_age_days": 45,
+        "author_prior_violations": 3,
+        "truth": {
+            "verdict": "remove",
+            "violated_rules": ["R1"],
+            "severity": "high",
+            "key_concepts": ["obfuscated", "hate speech", "hinglish", "leetspeak", "xenophobia", "dog whistle", "coded language"],
+        },
+    },
+    {
+        "id": "hard-7",
+        "content": "ನಮ್ಮ ಏರಿಯಾದಲ್ಲಿ ಒಂದು community ಇದೆ, ಅವರೆಲ್ಲ ತುಂಬಾ ಒಳ್ಳೆಯ ಜನ. ನಿನ್ನೆ ಅವರ festival ಗೆ ಹೋಗಿದ್ದೆ, ಊಟ ತುಂಬಾ ಚೆನ್ನಾಗಿತ್ತು! ನಾವೆಲ್ಲ ಒಂದೇ 🤝❤️",
+        "author_name": "NammaBengaluru",
+        "author_account_age_days": 900,
+        "author_prior_violations": 0,
+        "truth": {
+            "verdict": "approve",
+            "violated_rules": [],
+            "severity": "none",
+            "key_concepts": ["positive", "kannada", "community", "harmony", "no violation", "interfaith"],
+        },
+    },
+    {
+        "id": "hard-8",
+        "content": "URGENT 🚨 Bangalore mein paani mein zeher mila diya hai!! Mera insider source hai BBMP mein. Paani mat peena bilkul bhi! Ye companies water purifier bechne ke liye kar rahi hain. Ye lo best purifier buy karo 👉 amzn.to/xyz123 #bangalorewater #alert",
+        "author_name": "AlertBhai",
+        "author_account_age_days": 5,
+        "author_prior_violations": 0,
+        "truth": {
+            "verdict": "escalate",
+            "violated_rules": ["R4", "R3"],
+            "severity": "high",
+            "key_concepts": ["misinformation", "hinglish", "panic", "affiliate spam", "false emergency", "mixed motives", "local context"],
+        },
+    },
 ]
 
 TASKS = {
     "easy_moderation": {
-        "description": "Obvious policy violations and clearly safe content",
+        "description": "Obvious policy violations and clearly safe content (includes multilingual posts)",
         "difficulty": "easy",
         "posts": EASY_POSTS,
     },
     "medium_moderation": {
-        "description": "Context-dependent and borderline content requiring careful judgement",
+        "description": "Context-dependent and borderline content requiring careful judgement (includes Hindi, Hinglish, Kannada)",
         "difficulty": "medium",
         "posts": MEDIUM_POSTS,
     },
     "hard_moderation": {
-        "description": "Adversarial, obfuscated, and nuanced content that challenges even expert moderators",
+        "description": "Adversarial, obfuscated, and nuanced multilingual content that challenges even expert moderators",
         "difficulty": "hard",
         "posts": HARD_POSTS,
     },
