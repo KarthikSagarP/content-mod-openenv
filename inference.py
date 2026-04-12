@@ -177,8 +177,8 @@ async def run_task(task_name: str, llm_client: OpenAI, base_url: str) -> float:
 
     try:
         async with websockets.connect(ws_url, close_timeout=10) as ws:
-            # Reset
-            await ws.send(json.dumps({"type": "reset", "data": {}}))
+            # Reset with task_id
+            await ws.send(json.dumps({"type": "reset", "data": {"task_id": task_name}}))
             reset_msg = json.loads(await ws.recv())
             obs = reset_msg.get("data", {}).get("observation", reset_msg.get("data", {}))
             done = reset_msg.get("data", {}).get("done", False)
